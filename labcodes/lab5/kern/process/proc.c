@@ -87,7 +87,7 @@ static struct proc_struct *
 alloc_proc(void) {
     struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
     if (proc != NULL) {
-    //LAB4:EXERCISE1 YOUR CODE
+    //LAB4:EXERCISE1 2012012057
     /*
      * below fields in proc_struct need to be initialized
      *       enum proc_state state;                      // Process state
@@ -103,12 +103,26 @@ alloc_proc(void) {
      *       uint32_t flags;                             // Process flag
      *       char name[PROC_NAME_LEN + 1];               // Process name
      */
-     //LAB5 YOUR CODE : (update LAB4 steps)
+    	proc->state = PROC_UNINIT;
+    	proc->pid = -1;  //later we will use get_pid to set it
+    	proc->runs = 0;
+    	proc->kstack = 0; //later we will use setup_kstack to set it
+    	proc->need_resched = 0;
+    	proc->parent = NULL; //later we will set it to current
+    	proc->mm = NULL;	//for kernel we dont't need it, just copy_mm
+    	memset(&(proc->context), 0, sizeof(struct context));
+    	proc->tf = NULL;		//copy_thread set up tf and context
+        proc->cr3 = boot_cr3;	//for kernel process we use the same cr3
+        proc->flags = 0;
+        memset(proc->name, 0, PROC_NAME_LEN);
+     //LAB5 2012012057 : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	
      *       uint32_t wait_state;                        // waiting state
      *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
 	 */
+        proc->wait_state = 0;
+        proc->cptr = proc->yptr = proc->optr = NULL;
     }
     return proc;
 }
@@ -370,7 +384,7 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
         goto fork_out;
     }
     ret = -E_NO_MEM;
-    //LAB4:EXERCISE2 YOUR CODE
+    //LAB4:EXERCISE2 2012012057
     /*
      * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
      * MACROs or Functions:
@@ -395,15 +409,31 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
+    if ((proc = alloc_proc()) == NULL)
+    	goto fork_out;
+    proc->parent = current;
+    if (setup_kstack(proc) != 0)
+    	goto bad_fork_cleanup_proc;
+    if (copy_mm(clone_flags, proc) != 0)
+    	goto bad_fork_cleanup_kstack;
+    copy_thread(proc, stack, tf);
 
-	//LAB5 YOUR CODE : (update LAB4 steps)
+	//LAB5 2012012057 : (update LAB4 steps)
    /* Some Functions
-    *    set_links:  set the relation links of process.  ALSO SEE: remove_links:  lean the relation links of process 
+    *    set_links:  set the relation links of process.  ALSO SEE: remove_links:  lean the relation links of process
     *    -------------------
 	*    update step 1: set child proc's parent to current process, make sure current process's wait_state is 0
 	*    update step 5: insert proc_struct into hash_list && proc_list, set the relation links of process
     */
-	
+	assert(current->wait_state == 0);
+    bool interupt;
+    local_intr_save(interupt);
+	proc->pid = get_pid();
+	hash_proc(proc);
+	set_links(proc);
+    local_intr_restore(interupt);
+    wakeup_proc(proc);
+    ret = proc->pid;
 fork_out:
     return ret;
 
@@ -593,7 +623,7 @@ load_icode(unsigned char *binary, size_t size) {
     //(6) setup trapframe for user environment
     struct trapframe *tf = current->tf;
     memset(tf, 0, sizeof(struct trapframe));
-    /* LAB5:EXERCISE1 YOUR CODE
+    /* LAB5:EXERCISE1 2012012057
      * should set tf_cs,tf_ds,tf_es,tf_ss,tf_esp,tf_eip,tf_eflags
      * NOTICE: If we set trapframe correctly, then the user level process can return to USER MODE from kernel. So
      *          tf_cs should be USER_CS segment (see memlayout.h)
@@ -602,6 +632,11 @@ load_icode(unsigned char *binary, size_t size) {
      *          tf_eip should be the entry point of this binary program (elf->e_entry)
      *          tf_eflags should be set to enable computer to produce Interrupt
      */
+    tf->tf_cs = USER_CS;
+    tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+    tf->tf_esp = USTACKTOP;
+    tf->tf_eip = elf->e_entry;
+    tf->tf_eflags = FL_IF;
     ret = 0;
 out:
     return ret;
@@ -742,7 +777,7 @@ do_kill(int pid) {
 // kernel_execve - do SYS_exec syscall to exec a user program called by user_main kernel_thread
 static int
 kernel_execve(const char *name, unsigned char *binary, size_t size) {
-    int ret, len = strlen(name);
+	int ret, len = strlen(name);
     asm volatile (
         "int %1;"
         : "=a" (ret)
@@ -802,7 +837,8 @@ init_main(void *arg) {
     assert(nr_process == 2);
     assert(list_next(&proc_list) == &(initproc->list_link));
     assert(list_prev(&proc_list) == &(initproc->list_link));
-
+    assert(nr_free_pages_store == nr_free_pages());
+    assert(kernel_allocated_store == kallocated());
     cprintf("init check memory pass.\n");
     return 0;
 }
